@@ -1,0 +1,86 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  S3 bucket that hosts the built Tetris static site (KAN-7).
+  The deploy workflow (.github/workflows/deploy.yml) syncs dist/ into it.
+
+Parameters:
+  BucketName:
+    Type: String
+    Default: vincent-tetris-app
+    Description: Globally unique name of the S3 bucket.
+  PublicWebsite:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+    Description: >-
+      "true" enables S3 static website hosting and a public-read bucket policy
+      (site reachable at the S3 website endpoint). Keep "false" when serving
+      the bucket privately through CloudFront.
+
+Conditions:
+  IsPublicWebsite: !Equals [!Ref PublicWebsite, "true"]
+
+Resources:
+  SiteBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Ref BucketName
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        IgnorePublicAcls: true
+        BlockPublicPolicy: !If [IsPublicWebsite, false, true]
+        RestrictPublicBuckets: !If [IsPublicWebsite, false, true]
+      WebsiteConfiguration: !If
+        - IsPublicWebsite
+        - IndexDocument: index.html
+          ErrorDocument: index.html
+        - !Ref AWS::NoValue
+      Tags:
+        - Key: app
+          Value: tetris
+
+  SiteBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref SiteBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          # S3 website endpoints are HTTP-only, so TLS is enforced only for
+          # the private (CloudFront) mode.
+          - !If
+            - IsPublicWebsite
+            - Sid: PublicReadForWebsite
+              Effect: Allow
+              Principal: "*"
+              Action: "s3:GetObject"
+              Resource: !Sub "${SiteBucket.Arn}/*"
+            - Sid: DenyInsecureTransport
+              Effect: Deny
+              Principal: "*"
+              Action: "s3:*"
+              Resource:
+                - !GetAtt SiteBucket.Arn
+                - !Sub "${SiteBucket.Arn}/*"
+              Condition:
+                Bool:
+                  aws:SecureTransport: "false"
+
+Outputs:
+  BucketName:
+    Description: Value to store in the S3_BUCKET GitHub variable.
+    Value: !Ref SiteBucket
+  BucketArn:
+    Value: !GetAtt SiteBucket.Arn
+  WebsiteURL:
+    Condition: IsPublicWebsite
+    Value: !GetAtt SiteBucket.WebsiteURL

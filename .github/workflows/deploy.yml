@@ -1,11 +1,15 @@
 # Build, test and deploy the Tetris static site to AWS (S3 + optional CloudFront).
 #
-# All AWS settings are read from the secrets of the GitHub *environment* named
+# The target bucket is read from the GitHub Actions *variable* S3_BUCKET
+# (repo or `production` environment level; value: vincent-tetris-app). The
+# bucket itself is provisioned by .github/workflows/infrastructure.yml.
+# For backwards compatibility a `S3_BUCKET` secret is used as a fallback.
+#
+# AWS settings are read from the secrets of the GitHub *environment* named
 # below (Settings → Environments → production → Environment secrets):
 #
 #   Required:
 #     AWS_REGION                  e.g. us-east-1
-#     S3_BUCKET                   target bucket name (without s3://)
 #   Authentication — provide ONE of:
 #     AWS_ROLE_ARN                IAM role to assume via GitHub OIDC (recommended)
 #     AWS_ACCESS_KEY_ID +
@@ -67,18 +71,20 @@ jobs:
       id-token: write # required for OIDC (AWS_ROLE_ARN)
     env:
       AWS_REGION: ${{ secrets.AWS_REGION }}
-      S3_BUCKET: ${{ secrets.S3_BUCKET }}
+      S3_BUCKET: ${{ vars.S3_BUCKET || secrets.S3_BUCKET }}
       CLOUDFRONT_DISTRIBUTION_ID: ${{ secrets.CLOUDFRONT_DISTRIBUTION_ID }}
     steps:
       - name: Validate configuration
         run: |
           missing=0
-          for name in AWS_REGION S3_BUCKET; do
-            if [ -z "${!name}" ]; then
-              echo "::error::Missing environment secret $name"
-              missing=1
-            fi
-          done
+          if [ -z "$AWS_REGION" ]; then
+            echo "::error::Missing environment secret AWS_REGION"
+            missing=1
+          fi
+          if [ -z "$S3_BUCKET" ]; then
+            echo "::error::Missing GitHub variable S3_BUCKET (gh variable set S3_BUCKET --body vincent-tetris-app)"
+            missing=1
+          fi
           exit $missing
 
       - name: Download build artifact

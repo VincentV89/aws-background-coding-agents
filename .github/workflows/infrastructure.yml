@@ -1,0 +1,85 @@
+# Provision the deployment infrastructure (S3 bucket "vincent-tetris-app")
+# from infra/s3-bucket.yml using CloudFormation.
+#
+# Uses the same `production` environment secrets as deploy.yml
+# (AWS_REGION + AWS_ROLE_ARN, or AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY).
+# The IAM principal needs cloudformation:* on the stack and s3:CreateBucket,
+# s3:PutBucket*, s3:GetBucket* on the bucket.
+#
+# Bucket name comes from the GitHub variable S3_BUCKET (repo or environment
+# level), defaulting to vincent-tetris-app. GITHUB_TOKEN cannot write Actions
+# variables, so set it once with:
+#   gh variable set S3_BUCKET --body vincent-tetris-app
+name: Provision infrastructure
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - infra/**
+      - .github/workflows/infrastructure.yml
+  workflow_dispatch:
+    inputs:
+      public_website:
+        description: Enable public S3 static website hosting
+        type: choice
+        options: ["false", "true"]
+        default: "false"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: infrastructure-production
+  cancel-in-progress: false
+
+jobs:
+  provision:
+    name: Deploy CloudFormation stack
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: read
+      id-token: write # required for OIDC (AWS_ROLE_ARN)
+    env:
+      AWS_REGION: ${{ secrets.AWS_REGION }}
+      S3_BUCKET: ${{ vars.S3_BUCKET || 'vincent-tetris-app' }}
+      PUBLIC_WEBSITE: ${{ inputs.public_website || 'false' }}
+      STACK_NAME: tetris-app-infrastructure
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate configuration
+        run: |
+          if [ -z "$AWS_REGION" ]; then
+            echo "::error::Missing environment secret AWS_REGION"
+            exit 1
+          fi
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ secrets.AWS_REGION }}
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+      - name: Deploy stack
+        run: |
+          aws cloudformation deploy \
+            --stack-name "$STACK_NAME" \
+            --template-file infra/s3-bucket.yml \
+            --parameter-overrides \
+              "BucketName=$S3_BUCKET" \
+              "PublicWebsite=$PUBLIC_WEBSITE" \
+            --no-fail-on-empty-changeset
+
+      - name: Show outputs
+        run: |
+          aws cloudformation describe-stacks \
+            --stack-name "$STACK_NAME" \
+            --query "Stacks[0].Outputs" \
+            --output table
+          if [ -z "${{ vars.S3_BUCKET }}" ]; then
+            echo "::warning::GitHub variable S3_BUCKET is not set. Run: gh variable set S3_BUCKET --body $S3_BUCKET"
+          fi
