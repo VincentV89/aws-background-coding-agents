@@ -60,10 +60,6 @@ stacks vertically and touch buttons appear for movement and drops.
 
 ### Deploy to AWS (CI/CD)
 
-> **Setup step:** the workflow is committed as `ci/deploy.yml` because the agent's token
-> could not write to `.github/workflows/`. Enable it with:
-> `mkdir -p .github/workflows && git mv ci/deploy.yml .github/workflows/deploy.yml`
-
 `.github/workflows/deploy.yml` builds, type-checks and tests the app, then syncs `dist/` to an
 S3 bucket (and optionally invalidates a CloudFront distribution). It runs on every push to
 `main` and can also be started manually (Actions → Deploy to AWS → Run workflow).
