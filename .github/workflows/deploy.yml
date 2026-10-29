@@ -1,0 +1,116 @@
+# Build, test and deploy the Tetris static site to AWS (S3 + optional CloudFront).
+#
+# All AWS settings are read from the secrets of the GitHub *environment* named
+# below (Settings → Environments → production → Environment secrets):
+#
+#   Required:
+#     AWS_REGION                  e.g. us-east-1
+#     S3_BUCKET                   target bucket name (without s3://)
+#   Authentication — provide ONE of:
+#     AWS_ROLE_ARN                IAM role to assume via GitHub OIDC (recommended)
+#     AWS_ACCESS_KEY_ID +
+#     AWS_SECRET_ACCESS_KEY       static IAM user credentials
+#   Optional:
+#     CLOUDFRONT_DISTRIBUTION_ID  if set, the distribution cache is invalidated
+name: Deploy to AWS
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build and test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type-check
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist
+          retention-days: 7
+
+  deploy:
+    name: Deploy
+    needs: build
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: read
+      id-token: write # required for OIDC (AWS_ROLE_ARN)
+    env:
+      AWS_REGION: ${{ secrets.AWS_REGION }}
+      S3_BUCKET: ${{ secrets.S3_BUCKET }}
+      CLOUDFRONT_DISTRIBUTION_ID: ${{ secrets.CLOUDFRONT_DISTRIBUTION_ID }}
+    steps:
+      - name: Validate configuration
+        run: |
+          missing=0
+          for name in AWS_REGION S3_BUCKET; do
+            if [ -z "${!name}" ]; then
+              echo "::error::Missing environment secret $name"
+              missing=1
+            fi
+          done
+          exit $missing
+
+      - name: Download build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ secrets.AWS_REGION }}
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+      - name: Upload hashed assets (long cache)
+        run: |
+          aws s3 sync dist/assets "s3://${S3_BUCKET}/assets" \
+            --delete \
+            --cache-control "public, max-age=31536000, immutable"
+
+      - name: Upload remaining files (no cache)
+        run: |
+          aws s3 sync dist "s3://${S3_BUCKET}" \
+            --delete \
+            --exclude "assets/*" \
+            --cache-control "no-cache"
+
+      - name: Invalidate CloudFront cache
+        if: env.CLOUDFRONT_DISTRIBUTION_ID != ''
+        run: |
+          aws cloudfront create-invalidation \
+            --distribution-id "${CLOUDFRONT_DISTRIBUTION_ID}" \
+            --paths "/*"

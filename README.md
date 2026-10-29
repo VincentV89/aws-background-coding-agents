@@ -57,3 +57,25 @@ stacks vertically and touch buttons appear for movement and drops.
 - `src/game/tetris.test.ts`: unit tests for the game logic
 - `src/App.tsx`: React UI, keyboard handling and the gravity timer
 - `src/App.css`: styles, including the responsive layout
+
+### Deploy to AWS (CI/CD)
+
+`.github/workflows/deploy.yml` builds, type-checks and tests the app, then syncs `dist/` to an
+S3 bucket (and optionally invalidates a CloudFront distribution). It runs on every push to
+`main` and can also be started manually (Actions → Deploy to AWS → Run workflow).
+
+The deploy job uses the GitHub environment **`production`**. Create it under
+Settings → Environments and add these environment secrets:
+
+| Secret                       | Required | Description                                          |
+| ---------------------------- | -------- | ---------------------------------------------------- |
+| `AWS_REGION`                 | yes      | AWS region, e.g. `us-east-1`                         |
+| `S3_BUCKET`                  | yes      | Target bucket name (without `s3://`)                 |
+| `AWS_ROLE_ARN`               | one of   | IAM role to assume via GitHub OIDC (recommended)     |
+| `AWS_ACCESS_KEY_ID`          | one of   | Static IAM credentials (use with the secret key)     |
+| `AWS_SECRET_ACCESS_KEY`      | one of   | Static IAM credentials (use with the access key ID)  |
+| `CLOUDFRONT_DISTRIBUTION_ID` | no       | If set, `/*` is invalidated after upload             |
+
+The credentials need `s3:ListBucket` on the bucket, `s3:PutObject`/`s3:DeleteObject` on its
+objects, and `cloudfront:CreateInvalidation` if CloudFront is used. Note the sync uses
+`--delete`, so the bucket should be dedicated to this site.
